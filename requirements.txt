@@ -1,0 +1,6 @@
+gradio==4.44.1
+open3d==0.18.0
+numpy==1.26.4
+plotly==5.23.0
+ezdxf==1.3.3
+scipy==1.14.1
