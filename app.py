@@ -33,6 +33,7 @@ COLOR_PALETTE = [
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "outputs")
 SERVER_NAME = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
 SERVER_PORT = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+GRADIO_SHARE = os.getenv("GRADIO_SHARE", "false").lower() in {"1", "true", "yes"}
 
 
 def rgb_float_to_css(rgb):
@@ -197,7 +198,7 @@ def process_scan(scan_file, picking_file):
         if dxf_files:
             log_lines.append(f"DXF exports: {len(dxf_files)} file(s) created.")
 
-        return fig_main, fig_sections, "\n".join(log_lines), dxf_files
+        return fig_main, fig_sections, "\n".join(log_lines), "\n".join(dxf_files) if dxf_files else "No DXF files generated."
 
     except gr.Error:
         raise
@@ -223,7 +224,7 @@ with gr.Blocks(title="Tomb Section Processor") as demo:
         viewer_sections = gr.Plot(label="Viewer 2")
 
     status_box = gr.Textbox(label="Run Log", lines=12)
-    dxf_output = gr.Files(label="Generated DXF Files")
+    dxf_output = gr.Textbox(label="Generated DXF Files", lines=6)
 
     run_button.click(
         fn=process_scan,
@@ -233,4 +234,9 @@ with gr.Blocks(title="Tomb Section Processor") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_name=SERVER_NAME, server_port=SERVER_PORT)
+    demo.launch(
+        server_name=SERVER_NAME,
+        server_port=SERVER_PORT,
+        show_api=False,
+        share=GRADIO_SHARE,
+    )
