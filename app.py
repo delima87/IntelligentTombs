@@ -237,6 +237,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name=SERVER_NAME,
         server_port=SERVER_PORT,
-        show_api=False,
         share=GRADIO_SHARE,
     )
