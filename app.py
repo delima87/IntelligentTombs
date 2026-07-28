@@ -1,4 +1,5 @@
 import os
+import socket
 import traceback
 
 import gradio as gr
@@ -34,6 +35,22 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "outputs")
 SERVER_NAME = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
 SERVER_PORT = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
 GRADIO_SHARE = os.getenv("GRADIO_SHARE", "false").lower() in {"1", "true", "yes"}
+
+
+def _get_available_port(start_port: int = 7860):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((SERVER_NAME, start_port))
+            return start_port
+        except OSError:
+            for port in range(start_port + 1, start_port + 20):
+                try:
+                    sock.bind((SERVER_NAME, port))
+                    return port
+                except OSError:
+                    continue
+            return start_port
 
 
 def rgb_float_to_css(rgb):
@@ -164,8 +181,8 @@ def process_scan(scan_file, picking_file):
 
                 keypoints = compute_iss_keypoints(
                     z_section,
-                    gamma_21=0.3,
-                    gamma_32=0.3,
+                    gamma_21=0.5,
+                    gamma_32=0.5,
                     min_neighbors=1,
                     color=color,
                 )
@@ -189,6 +206,9 @@ def process_scan(scan_file, picking_file):
 
         fig_main = build_figure(scene_traces, "Viewer 1: Aligned Point Cloud + Sections")
         fig_sections = build_figure(section_traces, "Viewer 2: Section Keypoints + Lines")
+
+        fig_main.write_html(os.path.join(OUTPUT_DIR, "viewer_main.html"), include_plotlyjs="cdn")
+        fig_sections.write_html(os.path.join(OUTPUT_DIR, "viewer_sections.html"), include_plotlyjs="cdn")
 
         if section_count == 0:
             log_lines.append("No sections were generated.")
@@ -234,8 +254,9 @@ with gr.Blocks(title="Tomb Section Processor") as demo:
 
 
 if __name__ == "__main__":
+    resolved_port = _get_available_port(SERVER_PORT)
     demo.launch(
         server_name=SERVER_NAME,
-        server_port=SERVER_PORT,
+        server_port=resolved_port,
         share=GRADIO_SHARE,
     )
