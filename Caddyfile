@@ -1,3 +1,0 @@
-tomb-plans.duckdns.org {
-    reverse_proxy tomb-processor:7860
-}
