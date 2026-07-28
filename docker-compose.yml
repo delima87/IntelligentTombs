@@ -4,13 +4,31 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: tomb-processor
-    ports:
-      - "7860:7860"
+    expose:
+      - "7860"
     environment:
       - GRADIO_SERVER_NAME=0.0.0.0
       - GRADIO_SERVER_PORT=7860
-      - GRADIO_SHARE=true
+      - GRADIO_SHARE=false
       - OUTPUT_DIR=/app/outputs
     volumes:
       - ./outputs:/app/outputs
     restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    depends_on:
+      - tomb-processor
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

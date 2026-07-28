@@ -1,11 +1,16 @@
 import os
+import shutil
 import socket
+import tempfile
 import traceback
+import uuid
+import zipfile
 
 import gradio as gr
 import numpy as np
 import open3d as o3d
 import plotly.graph_objects as go
+import plotly.io as pio
 
 from utils import (
     align_main_plane_with_grid,
@@ -113,7 +118,7 @@ def line_set_trace(lineset, name, color=None, width=2):
     )
 
 
-def build_figure(traces, title):
+def build_figure(traces, title, show_legend=True):
     fig = go.Figure(data=[t for t in traces if t is not None])
     fig.update_layout(
         title=title,
@@ -124,9 +129,59 @@ def build_figure(traces, title):
             "zaxis_title": "Z",
             "aspectmode": "data",
         },
+        showlegend=show_legend,
         legend={"x": 0.01, "y": 0.99},
     )
     return fig
+
+
+def numpy_points_trace(points, name, color=None, marker_size=3.0):
+    arr = np.asarray(points)
+    if arr.size == 0:
+        return None
+
+    marker = {"size": marker_size, "opacity": 0.9}
+    marker["color"] = rgb_float_to_css(color or [0.0, 1.0, 0.0])
+
+    return go.Scatter3d(
+        x=arr[:, 0],
+        y=arr[:, 1],
+        z=arr[:, 2],
+        mode="markers",
+        marker=marker,
+        name=name,
+    )
+
+
+def write_pipeline_steps_html(step_figures, output_path):
+    sections = [
+        "<!doctype html>",
+        "<html>",
+        "<head>",
+        "  <meta charset=\"utf-8\" />",
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
+        "  <title>Pipeline Step Figures</title>",
+        "  <style>",
+        "    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin: 0; padding: 24px; background: #f7f7f7; }",
+        "    h1 { margin: 0 0 20px; }",
+        "    .panel { background: white; border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-bottom: 18px; }",
+        "  </style>",
+        "</head>",
+        "<body>",
+        "  <h1>Point Cloud Processing Pipeline</h1>",
+    ]
+
+    for idx, fig in enumerate(step_figures):
+        include_plotly = "cdn" if idx == 0 else False
+        fig_html = pio.to_html(fig, include_plotlyjs=include_plotly, full_html=False)
+        sections.append("  <div class=\"panel\">")
+        sections.append(fig_html)
+        sections.append("  </div>")
+
+    sections.extend(["</body>", "</html>"])
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(sections))
 
 
 def process_scan(scan_file, picking_file):
@@ -145,7 +200,8 @@ def process_scan(scan_file, picking_file):
     log_lines = []
 
     try:
-        pcd = read_and_downsample(scan_path, voxel_size=0.05)
+        pcd_downsampled = read_and_downsample(scan_path, voxel_size=0.05)
+        pcd = o3d.geometry.PointCloud(pcd_downsampled)
         ref_pts = read_picked_points(picking_path)
 
         if ref_pts is not None:
@@ -156,9 +212,30 @@ def process_scan(scan_file, picking_file):
 
         scene_traces = []
         section_traces = []
+        step3_traces = []
+        step4_traces = []
+        step5_traces = []
 
         scene_traces.append(point_cloud_trace(pcd, "Aligned Point Cloud", marker_size=1.2))
         scene_traces.append(line_set_trace(grid, "Grid", color=[0.6, 0.6, 0.6], width=1))
+
+        step1_fig = build_figure(
+            [point_cloud_trace(pcd_downsampled, "Downsampled Point Cloud", marker_size=1.3)],
+            "Step 1: read_and_downsample",
+            show_legend=False,
+        )
+
+        step2_traces = [
+            point_cloud_trace(pcd, "Aligned Point Cloud", marker_size=1.2),
+            line_set_trace(grid, "Grid", color=[0.6, 0.6, 0.6], width=1),
+        ]
+        if ref_pts_transformed is not None:
+            step2_traces.append(
+                numpy_points_trace(ref_pts_transformed, "Picked Points", color=[0.0, 1.0, 0.0], marker_size=4.0)
+            )
+            step3_traces.append(
+                numpy_points_trace(ref_pts_transformed, "Picked Points", color=[0.0, 1.0, 0.0], marker_size=4.0)
+            )
 
         dxf_files = []
         section_count = 0
@@ -195,11 +272,16 @@ def process_scan(scan_file, picking_file):
 
                 keypoint_trace = point_cloud_trace(keypoints, f"Section {idx + 1} Keypoints", marker_size=3.2)
                 line_trace = line_set_trace(lines, f"Section {idx + 1} Lines", color=color, width=3)
+                z_section_trace = point_cloud_trace(z_section, f"Section {idx + 1} Z Section", marker_size=2.0)
 
                 scene_traces.append(keypoint_trace)
                 scene_traces.append(line_trace)
                 section_traces.append(keypoint_trace)
                 section_traces.append(line_trace)
+                step3_traces.append(z_section_trace)
+                step4_traces.append(keypoint_trace)
+                step5_traces.append(keypoint_trace)
+                step5_traces.append(line_trace)
 
                 section_count += 1
                 log_lines.append(f"Section {idx + 1}: Z={z_value:.4f}, exported {dxf_path}")
@@ -207,8 +289,16 @@ def process_scan(scan_file, picking_file):
         fig_main = build_figure(scene_traces, "Viewer 1: Aligned Point Cloud + Sections")
         fig_sections = build_figure(section_traces, "Viewer 2: Section Keypoints + Lines")
 
+        step2_fig = build_figure(step2_traces, "Step 2: align_main_plane_with_grid", show_legend=False)
+        step3_fig = build_figure(step3_traces, "Step 3: create_z_section", show_legend=False)
+        step4_fig = build_figure(step4_traces, "Step 4: compute_iss_keypoints", show_legend=False)
+        step5_fig = build_figure(step5_traces, "Step 5: connect_keypoints_with_lines", show_legend=False)
+        pipeline_html_path = os.path.join(OUTPUT_DIR, "pipeline_steps.html")
+        write_pipeline_steps_html([step1_fig, step2_fig, step3_fig, step4_fig, step5_fig], pipeline_html_path)
+
         fig_main.write_html(os.path.join(OUTPUT_DIR, "viewer_main.html"), include_plotlyjs="cdn")
         fig_sections.write_html(os.path.join(OUTPUT_DIR, "viewer_sections.html"), include_plotlyjs="cdn")
+        log_lines.append(f"Pipeline figures exported: {pipeline_html_path}")
 
         if section_count == 0:
             log_lines.append("No sections were generated.")
@@ -227,6 +317,48 @@ def process_scan(scan_file, picking_file):
         raise gr.Error(f"Processing failed: {exc}\n\n{tb}")
 
 
+def build_output_archive():
+    if not os.path.isdir(OUTPUT_DIR):
+        raise gr.Error("No output directory found. Run processing first.")
+
+    files_to_package = []
+    for root, _, files in os.walk(OUTPUT_DIR):
+        for filename in files:
+            files_to_package.append(os.path.join(root, filename))
+
+    if not files_to_package:
+        raise gr.Error("No processed files available to download yet.")
+
+    archive_name = f"tomb_outputs_{uuid.uuid4().hex[:8]}.zip"
+    archive_path = os.path.join(tempfile.gettempdir(), archive_name)
+
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in files_to_package:
+            rel_path = os.path.relpath(file_path, OUTPUT_DIR)
+            archive.write(file_path, arcname=os.path.join("outputs", rel_path))
+
+    return archive_path
+
+
+def clear_for_new_pointcloud():
+    if os.path.isdir(OUTPUT_DIR):
+        for entry in os.scandir(OUTPUT_DIR):
+            if entry.is_file() or entry.is_symlink():
+                os.remove(entry.path)
+            elif entry.is_dir():
+                shutil.rmtree(entry.path)
+
+    return (
+        None,
+        None,
+        None,
+        None,
+        "Cleared all inputs, previews, and generated files. Ready for a new point cloud.",
+        "",
+        None,
+    )
+
+
 with gr.Blocks(title="Tomb Section Processor") as demo:
     gr.Markdown("# Tomb Section Processor")
     gr.Markdown(
@@ -237,7 +369,10 @@ with gr.Blocks(title="Tomb Section Processor") as demo:
         scan_input = gr.File(label="Scan File (.ply)", file_types=[".ply"], type="filepath")
         picking_input = gr.File(label="Picking List (.txt)", file_types=[".txt"], type="filepath")
 
-    run_button = gr.Button("Run Processing", variant="primary")
+    with gr.Row():
+        run_button = gr.Button("Run Processing", variant="primary")
+        download_button = gr.Button("Download Output Folder")
+        clear_button = gr.Button("Clear All / New Point Cloud")
 
     with gr.Row():
         viewer_main = gr.Plot(label="Viewer 1")
@@ -245,11 +380,22 @@ with gr.Blocks(title="Tomb Section Processor") as demo:
 
     status_box = gr.Textbox(label="Run Log", lines=12)
     dxf_output = gr.Textbox(label="Generated DXF Files", lines=6)
+    output_archive = gr.File(label="Processed Output Archive (.zip)")
 
     run_button.click(
         fn=process_scan,
         inputs=[scan_input, picking_input],
         outputs=[viewer_main, viewer_sections, status_box, dxf_output],
+    )
+
+    download_button.click(
+        fn=build_output_archive,
+        outputs=[output_archive],
+    )
+
+    clear_button.click(
+        fn=clear_for_new_pointcloud,
+        outputs=[scan_input, picking_input, viewer_main, viewer_sections, status_box, dxf_output, output_archive],
     )
 
 
